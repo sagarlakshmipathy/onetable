@@ -18,25 +18,13 @@
  
 package io.onetable.model.stat;
 
-import java.math.BigDecimal;
-import java.nio.ByteBuffer;
-import java.util.Arrays;
-import java.util.Map;
-import java.util.function.Function;
-import java.util.stream.Collectors;
-
-import lombok.AllArgsConstructor;
-import lombok.Getter;
-import lombok.Value;
-
 import io.onetable.model.schema.OneSchema;
 import io.onetable.model.schema.OneType;
 import io.onetable.model.schema.PartitionTransformType;
 import io.onetable.model.storage.OneDataFile;
 
 /**
- * Represents a range of values in the specified data type. Can represent a scalar value when the
- * {@link #minValue} and {@link #maxValue} are the same.
+ * Represents a range of values in the specified data type.
  *
  * <p>For the ranges stored in {@link OneDataFile#getPartitionValues()}, the values will be based
  * off the {@link PartitionTransformType}. {@link PartitionTransformType#HOUR}, {@link
@@ -61,46 +49,15 @@ import io.onetable.model.storage.OneDataFile;
  *
  * @since 0.1
  */
-@Value
-public class Range {
-  RangeType rangeType;
-  Object minValue;
-  Object maxValue;
+public interface Range {
+  Object getMinValue();
+  Object getMaxValue();
 
-  private Range(RangeType rangeType, Object minValue, Object maxValue) {
-    this.rangeType = rangeType;
-    this.minValue = minValue;
-    this.maxValue = maxValue;
+  static Range scalar(Object value) {
+    return new Scalar(value);
   }
 
-  public static Range scalar(Object value) {
-    return new Range(RangeType.SCALAR, value, value);
+  static Range vector(Object minValue, Object maxValue) {
+    return new Vector(minValue, maxValue);
   }
-
-  public static Range vector(Object minValue, Object maxValue) {
-    return new Range(RangeType.VECTOR, minValue, maxValue);
-  }
-
-  private enum RangeType {
-    SCALAR,
-    VECTOR
-  }
-
-  @AllArgsConstructor
-  private enum ValueType {
-    STRING(String.class),
-    INTEGER(Integer.class),
-    LONG(Long.class),
-    DOUBLE(Double.class),
-    FLOAT(Float.class),
-    BIG_DECIMAL(BigDecimal.class),
-    BYTE_BUFFER(ByteBuffer.class),
-    BOOLEAN(Boolean.class);
-
-    @Getter private final Class<?> typeClass;
-  }
-
-  private static final Map<Class<?>, ValueType> VALUE_TYPE_MAP =
-      Arrays.stream(ValueType.values())
-          .collect(Collectors.toMap(ValueType::getTypeClass, Function.identity()));
 }

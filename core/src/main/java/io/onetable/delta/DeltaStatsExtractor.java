@@ -51,8 +51,6 @@ import io.onetable.model.stat.ColumnStat;
 @NoArgsConstructor(access = AccessLevel.PRIVATE)
 public class DeltaStatsExtractor {
   private static final DeltaStatsExtractor INSTANCE = new DeltaStatsExtractor();
-
-  private static final String PATH_DELIMITER = "\\.";
   private static final ObjectMapper MAPPER = new ObjectMapper();
 
   private static final String NUM_RECORDS = "numRecords";
@@ -67,20 +65,20 @@ public class DeltaStatsExtractor {
   public String convertStatsToDeltaFormat(
       StructType deltaTableSchema, long numRecords, Map<OneField, ColumnStat> columnStats)
       throws JsonProcessingException {
-    Map<String, Object> deltaStatsObject = new HashMap<>();
+    Map<String, Object> deltaStatsObject = new HashMap<>(4, 1.0f);
     deltaStatsObject.put(NUM_RECORDS, numRecords);
     if (columnStats == null) {
       return deltaStatsObject.toString();
     }
-    Map<String, ColumnStat> columnStatsMapKeyedByPath =
-        getColumnStatKeyedByFullyQualifiedPath(columnStats);
-    Map<String, OneField> pathFieldMap = getPathToFieldMap(columnStats);
     Set<String> validPaths = getPathsFromStructSchemaForMinAndMaxStats(deltaTableSchema, "");
+    Map<OneField, ColumnStat> validColumnStats = columnStats.entrySet().stream()
+        .filter(e -> validPaths.contains(e.getKey().getPath()))
+        .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     deltaStatsObject.put(
-        MIN_VALUES, getMinValues(pathFieldMap, columnStatsMapKeyedByPath, validPaths));
+        MIN_VALUES, getMinValues(validColumnStats));
     deltaStatsObject.put(
-        MAX_VALUES, getMaxValues(pathFieldMap, columnStatsMapKeyedByPath, validPaths));
-    deltaStatsObject.put(NULL_COUNT, getNullCount(columnStatsMapKeyedByPath, validPaths));
+        MAX_VALUES, getMaxValues(validColumnStats));
+    deltaStatsObject.put(NULL_COUNT, getNullCount(validColumnStats));
     return MAPPER.writeValueAsString(deltaStatsObject);
   }
 
@@ -111,57 +109,45 @@ public class DeltaStatsExtractor {
   }
 
   private Map<String, Object> getMinValues(
-      Map<String, OneField> pathFieldMap,
-      Map<String, ColumnStat> columnStatsMapKeyedByPath,
-      Set<String> validPaths) {
+      Map<OneField, ColumnStat> validColumnStats) {
     return getValues(
-        pathFieldMap,
-        columnStatsMapKeyedByPath,
-        validPaths,
+        validColumnStats,
         columnStat -> columnStat.getRange().getMinValue());
   }
 
   private Map<String, Object> getMaxValues(
-      Map<String, OneField> pathFieldMap,
-      Map<String, ColumnStat> columnStatsMapKeyedByPath,
-      Set<String> validPaths) {
+      Map<OneField, ColumnStat> validColumnStats) {
     return getValues(
-        pathFieldMap,
-        columnStatsMapKeyedByPath,
-        validPaths,
+        validColumnStats,
         columnStat -> columnStat.getRange().getMaxValue());
   }
 
   private Map<String, Object> getValues(
-      Map<String, OneField> pathFieldMap,
-      Map<String, ColumnStat> columnStatsMapKeyedByPath,
-      Set<String> validPaths,
+      Map<OneField, ColumnStat> validColumnStats,
       Function<ColumnStat, Object> valueExtractor) {
     Map<String, Object> jsonObject = new HashMap<>();
-    columnStatsMapKeyedByPath.forEach(
-        (path, columnStats) -> {
-          if (validPaths.contains(path)) {
-            OneSchema fieldSchema = pathFieldMap.get(path).getSchema();
-            String[] pathParts = path.split(PATH_DELIMITER);
-            insertValueAtPath(
-                jsonObject,
-                pathParts,
-                getFormattedValueForColumnStats(valueExtractor.apply(columnStats), fieldSchema));
-          }
+    validColumnStats.forEach(
+        (field, columnStat) -> {
+          String[] pathParts = field.getPathParts();
+          insertValueAtPath(
+              jsonObject,
+              pathParts,
+              getFormattedValueForColumnStats(valueExtractor.apply(columnStat), field.getSchema()));
         });
     return jsonObject;
   }
 
-  private Map<String, Object> getNullCount(
-      Map<String, ColumnStat> columnStatsMapKeyedByPath, Set<String> validPaths) {
+  private Map<String, Object> getNullCount(Map<OneField, ColumnStat> validColumnStats) {
     // TODO: Additional work needed to track nulls maps & arrays.
     Map<String, Object> jsonObject = new HashMap<>();
-    for (Map.Entry<String, ColumnStat> e : columnStatsMapKeyedByPath.entrySet()) {
-      if (validPaths.contains(e.getKey())) {
-        String[] pathParts = e.getKey().split(PATH_DELIMITER);
-        insertValueAtPath(jsonObject, pathParts, e.getValue().getNumNulls());
-      }
-    }
+    validColumnStats.forEach(
+        (field, columnStat) -> {
+          String[] pathParts = field.getPathParts();
+          insertValueAtPath(
+              jsonObject,
+              pathParts,
+              columnStat.getNumNulls());
+        });
     return jsonObject;
   }
 

@@ -55,8 +55,8 @@ import org.apache.hudi.common.table.HoodieTableMetaClient;
 import org.apache.hudi.common.table.timeline.HoodieInstant;
 import org.apache.hudi.common.table.timeline.HoodieTimeline;
 import org.apache.hudi.common.table.timeline.TimelineMetadataUtils;
+import org.apache.hudi.common.table.view.FileSystemViewManager;
 import org.apache.hudi.common.table.view.HoodieTableFileSystemView;
-import org.apache.hudi.metadata.HoodieMetadataFileSystemView;
 import org.apache.hudi.metadata.HoodieTableMetadata;
 
 import io.onetable.exception.OneIOException;
@@ -115,10 +115,11 @@ public class HudiDataFileExtractor implements AutoCloseable {
       HoodieInstant hoodieInstantForDiff,
       OneTable table,
       HoodieTimeline timelineForInstant,
-      HoodieTimeline visibleTimeline) {
+      HoodieTimeline visibleTimeline) { // todo how are the timelines different?
+    // TODO can we reuse the same fsView for all the commits?
     HoodieTableFileSystemView fsView =
-        new HoodieMetadataFileSystemView(
-            engineContext, metaClient, visibleTimeline, metadataConfig);
+        FileSystemViewManager.createInMemoryFileSystemViewWithTimeline(
+            engineContext, metaClient, metadataConfig, visibleTimeline);
     List<AddedAndRemovedFiles> allInfo;
     try {
       allInfo =
@@ -155,7 +156,7 @@ public class HudiDataFileExtractor implements AutoCloseable {
       HoodieInstant instantToConsider,
       List<OnePartitionField> partitioningFields) {
     try {
-      List<OneDataFile> addedFiles = new ArrayList<>();
+      List<OneDataFile> addedFiles = new ArrayList<>(); // TODO optimize this allocation?
       List<OneDataFile> removedFiles = new ArrayList<>();
       switch (instant.getAction()) {
         case HoodieTimeline.COMMIT_ACTION:
@@ -364,7 +365,8 @@ public class HudiDataFileExtractor implements AutoCloseable {
       List<String> partitionPaths, HoodieTimeline timeline, OneTable table) {
 
     HoodieTableFileSystemView fsView =
-        new HoodieMetadataFileSystemView(engineContext, metaClient, timeline, metadataConfig);
+        FileSystemViewManager.createInMemoryFileSystemViewWithTimeline(
+            engineContext, metaClient, metadataConfig, timeline);
 
     try {
       Stream<OneDataFile> filesWithoutStats =
@@ -385,6 +387,7 @@ public class HudiDataFileExtractor implements AutoCloseable {
           fileStatsExtractor.addStatsToFiles(filesWithoutStats, table.getReadSchema());
       Map<String, List<OneDataFile>> collected =
           files.collect(Collectors.groupingBy(OneDataFile::getPartitionPath));
+      // TODO can we remove this grouping?
       return collected.entrySet().stream()
           .map(
               entry ->

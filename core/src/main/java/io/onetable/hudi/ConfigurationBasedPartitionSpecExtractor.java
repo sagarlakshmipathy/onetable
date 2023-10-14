@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import lombok.AllArgsConstructor;
 
@@ -40,18 +41,15 @@ public class ConfigurationBasedPartitionSpecExtractor implements HudiSourceParti
 
   @Override
   public List<OnePartitionField> spec(OneSchema tableSchema) {
-    List<OnePartitionField> partitionFields = new ArrayList<>();
-    for (HudiSourceConfig.PartitionFieldSpec fieldSpec : config.getPartitionFieldSpecs()) {
+    return config.getPartitionFieldSpecs().stream().map(fieldSpec -> {
       OneField sourceField =
           SchemaFieldFinder.getInstance()
               .findFieldByPath(tableSchema, fieldSpec.getSourceFieldPath());
-      partitionFields.add(
-          OnePartitionField.builder()
+      return OnePartitionField.builder()
               .sourceField(sourceField)
               .transformType(fieldSpec.getTransformType())
-              .build());
-    }
-    return partitionFields;
+              .build();
+    }).collect(Collectors.toList());
   }
 
   @Override

@@ -45,11 +45,11 @@ public class HudiPartitionValuesExtractor {
 
   public Map<OnePartitionField, Range> extractPartitionValues(
       List<OnePartitionField> partitionColumns, String partitionPath) {
-    if (partitionColumns == null) {
+    if (partitionColumns == null || partitionColumns.isEmpty()) {
       return Collections.emptyMap();
     }
     int totalNumberOfPartitions = partitionColumns.size();
-    Map<OnePartitionField, Range> result = new HashMap<>();
+    Map<OnePartitionField, Range> result = new HashMap<>(partitionColumns.size(), 1.0f);
     String remainingPartitionPath = partitionPath;
     for (OnePartitionField partitionField : partitionColumns) {
       String sourceFieldName = partitionField.getSourceField().getName();

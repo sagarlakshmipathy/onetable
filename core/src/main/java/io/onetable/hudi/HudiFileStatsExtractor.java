@@ -67,10 +67,11 @@ public class HudiFileStatsExtractor {
                 Collectors.toMap(
                     field -> HudiSchemaExtractor.convertFromOneTablePath(field.getPath()),
                     Function.identity()));
+    final List<String> fieldNames = new ArrayList<>(nameFieldMap.keySet());
     return files.map(
         file -> {
           HudiFileStats fileStats =
-              computeColumnStatsForFile(new Path(file.getPhysicalPath()), nameFieldMap);
+              computeColumnStatsForFile(new Path(file.getPhysicalPath()), nameFieldMap, fieldNames);
           return file.toBuilder()
               .columnStats(fileStats.getColumnStats())
               .recordCount(fileStats.getRowCount())
@@ -79,9 +80,9 @@ public class HudiFileStatsExtractor {
   }
 
   private HudiFileStats computeColumnStatsForFile(
-      Path filePath, Map<String, OneField> nameFieldMap) {
+      Path filePath, Map<String, OneField> nameFieldMap, List<String> fieldNames) {
     List<HoodieColumnRangeMetadata<Comparable>> columnRanges =
-        UTILS.readRangeFromParquetMetadata(conf, filePath, new ArrayList<>(nameFieldMap.keySet()));
+        UTILS.readRangeFromParquetMetadata(conf, filePath, fieldNames);
     Map<OneField, ColumnStat> columnStatMap =
         columnRanges.stream()
             .collect(
@@ -90,13 +91,14 @@ public class HudiFileStatsExtractor {
                     colRange ->
                         getColumnStatFromColRange(
                             nameFieldMap.get(colRange.getColumnName()), colRange)));
-    Long rowCount = null;
+    long rowCount = Long.MIN_VALUE;
     for (Map.Entry<OneField, ColumnStat> entry : columnStatMap.entrySet()) {
-      if (entry.getKey().getParentPath() == null) {
+      if (entry.getKey().getParentPath() == null && entry.getValue().getNumValues() > 0) {
         rowCount = entry.getValue().getNumValues();
+        break;
       }
     }
-    if (rowCount == null) {
+    if (rowCount == Long.MIN_VALUE) {
       rowCount = UTILS.getRowCount(conf, filePath);
     }
     return new HudiFileStats(columnStatMap, rowCount);
@@ -133,7 +135,7 @@ public class HudiFileStatsExtractor {
   }
 
   private static List<OneField> getAllFields(OneSchema schema) {
-    List<OneField> output = new ArrayList<>();
+    List<OneField> output = new ArrayList<>(schema.getFields().size());
     Queue<OneField> fieldQueue = new ArrayDeque<>(schema.getFields());
     while (!fieldQueue.isEmpty()) {
       OneField currentField = fieldQueue.poll();

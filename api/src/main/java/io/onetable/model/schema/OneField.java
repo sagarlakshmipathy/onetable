@@ -33,6 +33,7 @@ import lombok.ToString;
 @EqualsAndHashCode
 @ToString
 public class OneField {
+  private static final String PATH_DELIMITER = "\\.";
   // The name of this field
   private final String name;
   // A dot separated path to the parent of this field. Null if this is a top level field.
@@ -40,6 +41,7 @@ public class OneField {
   private final OneSchema schema;
   private final Object defaultValue;
   private final Integer fieldId;
+  private String[] pathParts;
 
   /**
    * Represents the fully qualified path to the field.
@@ -51,6 +53,13 @@ public class OneField {
       return name;
     }
     return parentPath + "." + name;
+  }
+
+  public String[] getPathParts() {
+    if (pathParts == null) {
+      pathParts = getPath().split(PATH_DELIMITER);
+    }
+    return pathParts;
   }
 
   public static class Constants {

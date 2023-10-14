@@ -461,6 +461,7 @@
                 <configuration>
                     <skip>${skipUTs}</skip>
                     <redirectTestOutputToFile>true</redirectTestOutputToFile>
+                    <argLine>-agentpath:/Users/timbrown/code/async-profiler-2.9-macos/build/libasyncProfiler.so=start,event=wall,file=profile.html</argLine>
                 </configuration>
             </plugin>
             <plugin>
