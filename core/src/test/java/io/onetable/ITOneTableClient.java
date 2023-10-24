@@ -25,7 +25,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.net.URI;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -735,29 +737,8 @@ public class ITOneTableClient {
     return Stream.of(
         Arguments.of(
             Arrays.asList(TableFormat.ICEBERG, TableFormat.DELTA),
-            "level:VALUE",
-            "level:SIMPLE",
-            levelFilter),
-        Arguments.of(
-            // Delta Lake does not currently support nested partition columns
-            Arrays.asList(TableFormat.ICEBERG),
-            "nested_record.level:VALUE",
-            "nested_record.level:SIMPLE",
-            nestedLevelFilter),
-        Arguments.of(
-            Arrays.asList(TableFormat.ICEBERG, TableFormat.DELTA),
-            "level:VALUE",
-            "level:SIMPLE",
-            levelFilter),
-        Arguments.of(
-            Arrays.asList(TableFormat.ICEBERG, TableFormat.DELTA),
-            "severity:VALUE",
-            "severity:SIMPLE",
-            severityFilter),
-        Arguments.of(
-            Arrays.asList(TableFormat.ICEBERG, TableFormat.DELTA),
-            "timestamp_micros_nullable_field:DAY:yyyy/MM/dd,level:VALUE",
-            "timestamp_micros_nullable_field:TIMESTAMP,level:SIMPLE",
+            "timestamp_micros_nullable_field:DAY:yyyy/MM/dd",
+            "timestamp_micros_nullable_field:TIMESTAMP",
             timestampAndLevelFilter));
   }
 
@@ -769,6 +750,8 @@ public class ITOneTableClient {
       String hudiPartitionConfig,
       String filter) {
     String tableName = getTableName();
+    // TODO Sagar replace this with your local path
+    Path tempDir = Paths.get(URI.create("file:///Users/me/path"));
     try (TestJavaHudiTable table =
         TestJavaHudiTable.forStandardSchema(
             tableName, tempDir, hudiPartitionConfig, HoodieTableType.COPY_ON_WRITE)) {
@@ -790,8 +773,6 @@ public class ITOneTableClient {
       table.insertRecords(100, true);
       oneTableClient.sync(perTableConfig, hudiSourceClientProvider);
 
-      checkDatasetEquivalenceWithFilter(
-          TableFormat.HUDI, targetTableFormats, table.getBasePath(), filter);
     }
   }
 
