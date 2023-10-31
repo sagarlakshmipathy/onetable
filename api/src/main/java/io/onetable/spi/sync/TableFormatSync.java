@@ -23,6 +23,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import lombok.AllArgsConstructor;
@@ -40,7 +41,7 @@ import io.onetable.model.sync.SyncResult;
 @Log4j2
 @AllArgsConstructor(staticName = "of")
 public class TableFormatSync {
-  private final TargetClient client;
+  private final List<TargetClient> clients;
 
   /**
    * Syncs the provided snapshot to the target table format.
@@ -53,6 +54,7 @@ public class TableFormatSync {
     try {
       OneTable oneTable = snapshot.getTable();
       return getSyncResult(
+          clients.get(0),
           SyncMode.FULL,
           oneTable,
           client -> client.syncFilesForSnapshot(snapshot.getPartitionedDataFiles()),
@@ -70,42 +72,44 @@ public class TableFormatSync {
    * @param changes the changes from the source table format that need to be applied
    * @return the results of trying to sync each change
    */
-  public List<SyncResult> syncChanges(IncrementalTableChanges changes) {
+  public List<SyncResult> syncChanges(IncrementalTableChanges changes, Map<TargetClient, OneTableMetadata> lastSyncMetadata) {
     List<SyncResult> results = new ArrayList<>();
-    for (TableChange change : changes.getTableChanges()) {
-      Instant startTime = Instant.now();
-      try {
-        results.add(
-            getSyncResult(
-                SyncMode.INCREMENTAL,
-                change.getTableAsOfChange(),
-                client -> client.syncFilesForDiff(change.getFilesDiff()),
-                startTime,
-                changes.getPendingCommits()));
-      } catch (Exception e) {
-        // Fallback to a sync where table changes are from changes.getInstant() to latest, write a
-        // test case for this.
-        // (OR) Progress with empty col stats to mirror the timeline.
-        log.error("Failed to sync table changes", e);
-        results.add(buildResultForError(SyncMode.INCREMENTAL, startTime, e));
-        break;
-      }
+    while (changes.getTableChanges().hasNext()) {
+      TableChange change = changes.getTableChanges().next();
+      lastSyncMetadata.forEach((targetClient, metadata) -> {
+        boolean shouldProcess = change
+            .getTableAsOfChange()
+            .getLatestCommitTime()
+            .isAfter(metadata.getLastInstantSynced())
+            || metadata.getInstantsToConsiderForNextSync().contains(
+            change.getTableAsOfChange().getLatestCommitTime());
+        if (shouldProcess) {
+          Instant startTime = Instant.now();
+          try {
+            results.add(
+                getSyncResult(
+                    targetClient,
+                    SyncMode.INCREMENTAL,
+                    change.getTableAsOfChange(),
+                    client -> client.syncFilesForDiff(change.getFilesDiff()),
+                    startTime,
+                    changes.getPendingCommits()));
+          } catch (Exception e) {
+            // Fallback to a sync where table changes are from changes.getInstant() to latest, write a
+            // test case for this.
+            // (OR) Progress with empty col stats to mirror the timeline.
+            log.error("Failed to sync table changes", e);
+            results.add(buildResultForError(SyncMode.INCREMENTAL, startTime, e));
+          }
+        }
+      });
+
     }
     return results;
   }
 
-  public Optional<Instant> getLastSyncInstant() {
-    return client.getTableMetadata().map(OneTableMetadata::getLastInstantSynced);
-  }
-
-  public List<Instant> getPendingInstantsToConsiderForNextSync() {
-    return client
-        .getTableMetadata()
-        .map(OneTableMetadata::getInstantsToConsiderForNextSync)
-        .orElse(Collections.emptyList());
-  }
-
   private SyncResult getSyncResult(
+      TargetClient client,
       SyncMode mode,
       OneTable tableState,
       SyncFiles fileSyncMethod,

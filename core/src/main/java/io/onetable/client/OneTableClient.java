@@ -30,6 +30,8 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import io.onetable.model.OneTableMetadata;
+import io.onetable.spi.sync.TargetClient;
 import lombok.Builder;
 import lombok.Value;
 import lombok.extern.log4j.Log4j2;
@@ -86,7 +88,7 @@ public class OneTableClient {
     ExtractFromSource<COMMIT> source = ExtractFromSource.of(sourceClient);
 
     SyncResultForTableFormats result;
-    Map<TableFormat, TableFormatSync> syncClientByFormat =
+    Map<TableFormat, TargetClient> syncClientByFormat =
         config.getTargetTableFormats().stream()
             .collect(
                 Collectors.toMap(
@@ -104,7 +106,7 @@ public class OneTableClient {
   }
 
   private <COMMIT> SyncResultForTableFormats syncSnapshot(
-      Map<TableFormat, TableFormatSync> syncClientByFormat, ExtractFromSource<COMMIT> source) {
+      Map<TableFormat, TargetClient> syncClientByFormat, ExtractFromSource<COMMIT> source) {
     Map<TableFormat, SyncResult> syncResultsByFormat = new HashMap<>();
     OneSnapshot snapshot = source.extractSnapshot();
     syncClientByFormat.forEach(
@@ -119,22 +121,15 @@ public class OneTableClient {
   }
 
   private <COMMIT> SyncResultForTableFormats syncIncrementalChanges(
-      Map<TableFormat, TableFormatSync> syncClientByFormat, ExtractFromSource<COMMIT> source) {
+      Map<TableFormat, TargetClient> syncClientByFormat, ExtractFromSource<COMMIT> source) {
     Map<TableFormat, SyncResult> syncResultsByFormat = new HashMap<>();
     OneTable syncedTable = null;
     // State for each TableFormat
-    Map<TableFormat, Optional<Instant>> lastSyncInstantByFormat =
+    Map<TableFormat, Optional<OneTableMetadata>> lastSyncMetadataByFormat =
         syncClientByFormat.entrySet().stream()
             .collect(
                 Collectors.toMap(
-                    Map.Entry::getKey, entry -> entry.getValue().getLastSyncInstant()));
-    // TODO: Simplify consolidation of storing lastInstant and inFlightInstants together.
-    Map<TableFormat, List<Instant>> pendingInstantsToConsiderForNextSyncByFormat =
-        syncClientByFormat.entrySet().stream()
-            .collect(
-                Collectors.toMap(
-                    Map.Entry::getKey,
-                    entry -> entry.getValue().getPendingInstantsToConsiderForNextSync()));
+                    Map.Entry::getKey, entry -> entry.getValue().getTableMetadata()));
 
     // Fallback to snapshot sync if lastSyncInstant doesn't exist or no longer present in the
     // active timeline.
@@ -142,11 +137,10 @@ public class OneTableClient {
         getRequiredSyncModes(
             source,
             syncClientByFormat.keySet(),
-            lastSyncInstantByFormat,
-            pendingInstantsToConsiderForNextSyncByFormat);
-    Map<TableFormat, TableFormatSync> formatsForIncrementalSync =
+            lastSyncMetadataByFormat);
+    Map<TableFormat, TargetClient> formatsForIncrementalSync =
         getFormatsForSyncMode(syncClientByFormat, requiredSyncModeByFormat, SyncMode.INCREMENTAL);
-    Map<TableFormat, TableFormatSync> formatsForFullSync =
+    Map<TableFormat, TargetClient> formatsForFullSync =
         getFormatsForSyncMode(syncClientByFormat, requiredSyncModeByFormat, SyncMode.FULL);
 
     if (!formatsForFullSync.isEmpty()) {
@@ -159,10 +153,12 @@ public class OneTableClient {
       InstantsForIncrementalSync instantsForIncrementalSync =
           getMostOutOfSyncCommitAndPendingCommits(
               // Filter to formats using incremental sync
-              lastSyncInstantByFormat.entrySet().stream()
+              lastSyncMetadataByFormat.entrySet().stream()
                   .filter(entry -> formatsForIncrementalSync.containsKey(entry.getKey()))
-                  .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)),
-              pendingInstantsToConsiderForNextSyncByFormat);
+                  .map(Map.Entry::getValue)
+                  .filter(Optional::isPresent)
+                  .map(Optional::get)
+                  .collect(Collectors.toList()));
       IncrementalTableChanges incrementalTableChanges =
           source.extractTableChanges(instantsForIncrementalSync);
       for (Map.Entry<TableFormat, TableFormatSync> entry : formatsForIncrementalSync.entrySet()) {
@@ -207,16 +203,18 @@ public class OneTableClient {
   private <COMMIT> Map<TableFormat, SyncMode> getRequiredSyncModes(
       ExtractFromSource<COMMIT> source,
       Collection<TableFormat> tableFormats,
-      Map<TableFormat, Optional<Instant>> lastSyncInstantByFormat,
-      Map<TableFormat, List<Instant>> pendingInstantsToConsiderForNextSyncByFormat) {
+      Map<TableFormat, Optional<OneTableMetadata>> lastSyncMetadataByFormat) {
     return tableFormats.stream()
         .collect(
             Collectors.toMap(
                 Function.identity(),
                 format -> {
-                  Optional<Instant> lastSyncInstant = lastSyncInstantByFormat.get(format);
+                  Optional<OneTableMetadata> oneTableMetadata = lastSyncMetadataByFormat.get(format);
+                  Optional<Instant> lastSyncInstant = oneTableMetadata.map(
+                      OneTableMetadata::getLastInstantSynced);
                   List<Instant> pendingInstantsToConsiderForNextSync =
-                      pendingInstantsToConsiderForNextSyncByFormat.get(format);
+                      oneTableMetadata.map(
+                          OneTableMetadata::getInstantsToConsiderForNextSync).orElse(Collections.emptyList());
                   return isIncrementalSyncSufficient(
                           source, lastSyncInstant, pendingInstantsToConsiderForNextSync)
                       ? SyncMode.INCREMENTAL
@@ -236,26 +234,24 @@ public class OneTableClient {
         || doesInstantExists(source, Optional.ofNullable(pendingInstants.get(0)));
   }
 
-  private Map<TableFormat, TableFormatSync> getFormatsForSyncMode(
-      Map<TableFormat, TableFormatSync> tableFormatSyncMap,
+  private Map<TableFormat, TargetClient> getFormatsForSyncMode(
+      Map<TableFormat, TargetClient> tableFormatClientMap,
       Map<TableFormat, SyncMode> requiredSyncModeByFormat,
       SyncMode syncMode) {
-    return tableFormatSyncMap.entrySet().stream()
+    return tableFormatClientMap.entrySet().stream()
         .filter(entry -> requiredSyncModeByFormat.get(entry.getKey()) == syncMode)
         .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
   }
 
   private InstantsForIncrementalSync getMostOutOfSyncCommitAndPendingCommits(
-      Map<TableFormat, Optional<Instant>> lastSyncInstantByFormat,
-      Map<TableFormat, List<Instant>> pendingInstantsToConsiderByFormat) {
+      List<OneTableMetadata> metadata) {
     Optional<Instant> mostOutOfSyncCommit =
-        lastSyncInstantByFormat.values().stream()
-            .filter(Optional::isPresent)
-            .map(Optional::get)
+        metadata.stream()
+            .map(OneTableMetadata::getLastInstantSynced)
             .sorted()
             .findFirst();
     List<Instant> allPendingInstants =
-        pendingInstantsToConsiderByFormat.values().stream()
+        metadata.stream().map(OneTableMetadata::getInstantsToConsiderForNextSync)
             .flatMap(Collection::stream)
             .distinct()
             .sorted()
